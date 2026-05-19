@@ -78,12 +78,17 @@ for c in "${CERTS[@]}"; do
   echo >> "$BUNDLE"
 done
 
-# Append the system root store so we don't *lose* public CAs
+# Append the system root store so we don't *lose* public CAs.
+# Homebrew may live under a custom $HOME prefix (no-sudo install) — ask brew.
+BREW_PREFIX=""
+command -v brew >/dev/null 2>&1 && BREW_PREFIX="$(brew --prefix 2>/dev/null)"
 for sys in \
+  "$BREW_PREFIX/etc/ca-certificates/cert.pem" \
+  "$BREW_PREFIX/etc/openssl@3/cert.pem" \
   /etc/ssl/cert.pem \
   /opt/homebrew/etc/ca-certificates/cert.pem \
   /usr/local/etc/ca-certificates/cert.pem; do
-  [ -f "$sys" ] && cat "$sys" >> "$BUNDLE" && break
+  [ -n "$sys" ] && [ -f "$sys" ] && cat "$sys" >> "$BUNDLE" && break
 done
 
 # --- 3. Wire it into the tools ------------------------------------------------
@@ -101,15 +106,18 @@ add_line "export SSL_CERT_FILE=$BUNDLE"         # openssl-based tools
 
 export NODE_EXTRA_CA_CERTS="$BUNDLE"
 
-# macOS: VS Code (Electron) also consults the System keychain. Import there too.
+# macOS: VS Code (Electron) also consults the keychain. Use the user LOGIN
+# keychain — no sudo needed (System keychain would require admin rights).
 if [ "$(uname)" = "Darwin" ]; then
-  info "Importing captured certs into the macOS System keychain (needs sudo)..."
+  LOGIN_KC="$HOME/Library/Keychains/login.keychain-db"
+  [ -f "$LOGIN_KC" ] || LOGIN_KC="$(security default-keychain | tr -d ' \"')"
+  info "Importing captured certs into the LOGIN keychain (no sudo)..."
   for c in "$CERT_DIR"/proxy-*.pem "$CERT_DIR"/*.crt "$CERT_DIR"/*.cer; do
     [ -e "$c" ] || continue
-    sudo security add-trusted-cert -d -r trustRoot \
-      -k /Library/Keychains/System.keychain "$c" 2>/dev/null \
+    # -r trustAsRoot works on a user keychain without admin; no -d (that's System)
+    security add-trusted-cert -r trustAsRoot -k "$LOGIN_KC" "$c" 2>/dev/null \
       && info "  trusted $(basename "$c")" \
-      || warn "  could not import $(basename "$c") (may already be trusted)"
+      || warn "  skipped $(basename "$c") (already trusted, or not a CA cert)"
   done
 fi
 

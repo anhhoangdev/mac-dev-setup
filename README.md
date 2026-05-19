@@ -4,9 +4,14 @@ My fresh-macOS VS Code environment, scripted.
 
 ## What it sets up
 
-- **Homebrew** (if missing)
-- **Fonts:** FiraCode Nerd Font (editor, with ligatures), DejaVu Sans Mono (terminal)
-- **VS Code** + extensions
+Fully **no-sudo / no-admin** — everything lives under `$HOME`:
+
+- **Homebrew** → `~/homebrew` (PATH export, not `/opt/homebrew`)
+- **mise** → `~/.local/share/mise` — manages Node/Python/Go/Ruby/Java/Rust
+  (replaces nvm/pyenv/etc); installs `node@lts` for the npm-based AI CLIs
+- **Casks** install to `~/Applications` + `~/Library/Fonts` (no `/Applications`)
+- **Fonts:** FiraCode Nerd Font (editor, ligatures), DejaVu Sans Mono (terminal)
+- **VS Code** + extensions; bundled `code` CLI auto-added to PATH
 - **Theme:** Catppuccin Mocha · **Icons:** Material Icon Theme
 - **Settings & keybindings** copied into `~/Library/Application Support/Code/User/`
 
@@ -33,9 +38,10 @@ source ~/.zshrc
 ./install.sh
 ```
 
-`setup-ca.sh` reads every `.pem/.crt/.cer` in `~/certs`, merges them with the
-system root store, and exports `NODE_EXTRA_CA_CERTS`, `CURL_CA_BUNDLE`,
-`REQUESTS_CA_BUNDLE`, `SSL_CERT_FILE` (persisted to `~/.zshrc`).
+`setup-ca.sh` auto-captures the chain the proxy presents (into `~/certs`),
+merges it with the system root store, exports `NODE_EXTRA_CA_CERTS` /
+`CURL_CA_BUNDLE` / `REQUESTS_CA_BUNDLE` / `SSL_CERT_FILE` (persisted to
+`~/.zshrc`), and imports into the **login keychain** — all **no sudo**.
 
 ## Layout
 
