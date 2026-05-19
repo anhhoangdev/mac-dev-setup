@@ -4,8 +4,9 @@
 # `code --install-extension`, npm, git, and curl stop failing with
 # "self-signed certificate in certificate chain".
 #
-# Drop your CA cert(s) into ~/cert (any .pem / .crt / .cer), then run this.
-# It builds a single bundle and wires it into the relevant tools.
+# It AUTO-CAPTURES the chain your proxy presents (no need to find the cert
+# yourself), plus any cert(s) you drop into ~/certs, builds one bundle, and
+# wires it into git/npm/node/curl + the macOS System keychain.
 #
 # Usage:  ./setup-ca.sh
 #
@@ -17,6 +18,29 @@ SHELL_RC="$HOME/.zshrc"
 
 info() { printf "\033[1;34m==>\033[0m %s\n" "$1"; }
 warn() { printf "\033[1;33m[!]\033[0m %s\n" "$1"; }
+
+mkdir -p "$CERT_DIR"
+
+# --- 0. Auto-grab the chain the proxy actually presents -----------------------
+# This is the reliable fix: whatever CA is doing TLS interception, we capture
+# every cert it sends for the VS Code marketplace + gallery hosts and trust them.
+info "Capturing live TLS chain from marketplace/gallery hosts..."
+for host in \
+  marketplace.visualstudio.com \
+  vscode.download.prss.microsoft.com \
+  az764295.vo.msecnd.net; do
+  out="$CERT_DIR/proxy-${host}.pem"
+  if echo | openssl s_client -showcerts -servername "$host" \
+        -connect "${host}:443" 2>/dev/null \
+      | awk '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/' \
+      > "$out" && [ -s "$out" ]; then
+    n=$(grep -c 'BEGIN CERTIFICATE' "$out" || echo 0)
+    info "  $host -> captured $n cert(s) into $(basename "$out")"
+  else
+    warn "  could not reach $host (continuing)"
+    rm -f "$out"
+  fi
+done
 
 # --- 1. Collect certs ---------------------------------------------------------
 if [ ! -d "$CERT_DIR" ]; then
@@ -77,11 +101,30 @@ add_line "export SSL_CERT_FILE=$BUNDLE"         # openssl-based tools
 
 export NODE_EXTRA_CA_CERTS="$BUNDLE"
 
+# macOS: VS Code (Electron) also consults the System keychain. Import there too.
+if [ "$(uname)" = "Darwin" ]; then
+  info "Importing captured certs into the macOS System keychain (needs sudo)..."
+  for c in "$CERT_DIR"/proxy-*.pem "$CERT_DIR"/*.crt "$CERT_DIR"/*.cer; do
+    [ -e "$c" ] || continue
+    sudo security add-trusted-cert -d -r trustRoot \
+      -k /Library/Keychains/System.keychain "$c" 2>/dev/null \
+      && info "  trusted $(basename "$c")" \
+      || warn "  could not import $(basename "$c") (may already be trusted)"
+  done
+fi
+
 # --- 4. Verify ----------------------------------------------------------------
 info "Verifying against the VS Code marketplace..."
 if curl -fsS --cacert "$BUNDLE" -o /dev/null https://marketplace.visualstudio.com; then
-  info "TLS OK. Now run:  source $SHELL_RC  &&  ./install.sh"
+  info "TLS OK."
+  info "Run:  source $SHELL_RC  &&  ./install.sh"
+  info "If 'code' STILL fails, fully quit VS Code first (Cmd+Q), then launch"
+  info "it from a NEW terminal so it inherits NODE_EXTRA_CA_CERTS."
 else
-  warn "Still failing. Your cert in $CERT_DIR may not be the full chain"
-  warn "(need the *root* proxy CA, not just the GitLab leaf cert)."
+  warn "Still failing after capturing the live chain."
+  warn "The proxy may block raw openssl too. Fallback options:"
+  warn "  1) Ask IT for the ROOT proxy CA, drop it in $CERT_DIR, re-run."
+  warn "  2) Temporary unblock: set \"http.proxyStrictSSL\": false in"
+  warn "     VS Code settings.json, OR run:"
+  warn "     NODE_TLS_REJECT_UNAUTHORIZED=0 code --install-extension <id>"
 fi
